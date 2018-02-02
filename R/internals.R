@@ -140,7 +140,6 @@ analyse <- function(param, w.dens, f.dens, mu.transi, seq.length, offsp) {
 ## Run analysis across SARS- and Ebola-like outbreaks
 run.analysis <- function(param) {
 
-  ## Run analysis for Ebola-like and SARS-like parameters
   ## Mutation rates are scaled by two thirds, as mu.transv is added by default
   
   ebola <- analyse(param = param,
@@ -165,7 +164,7 @@ run.analysis <- function(param) {
 
 ## Extract summary results from raw results
 create.store <- function(dir) {
-
+  
   store = list()
   
   create.est <- function(disease,temp.runs) {
@@ -173,14 +172,6 @@ create.store <- function(dir) {
     calc.est <- function(model, var){
       sapply(seq_len(temp.runs),
              function(i) mean(r[[disease]][[paste0(model,".result")]][[i]][[var]][22:201]))
-    }
-
-    calc.acc <- function(model) {
-
-      sapply(seq_len(temp.runs),
-             function(i) get.acc(r[[disease]][[paste0(model,".result")]][[i]],
-                                 r[[disease]]$outbreak[[i]]))
-
     }
 
     data.frame(Model=rep(c("tcg","tc","tg","t"),2,each=temp.runs),
@@ -193,14 +184,7 @@ create.store <- function(dir) {
                        calc.est("tc","lambda"),
                        calc.est("tg","lambda"),
                        calc.est("t","lambda")))
-                                        #Acc=c(calc.acc("tcg"),
-                                        #        calc.acc("tc"),
-                                        #        calc.acc("tg"),
-                                        #        calc.acc("t"),
-                                        #        calc.acc("tcg"),
-                                        #        calc.acc("tc"),
-                                        #        calc.acc("tg"),
-                                        #        calc.acc("t")))
+
   }
 
   create.offsp <- function(r, disease) {
@@ -271,10 +255,10 @@ create.store <- function(dir) {
 
 ##===== Plotting functions ======##
 
-## Plots the accuracy of transmission tree inference, with NTP as the y label
+## Plots the accuracy of transmission tree inference
 vis.acc <- function(store, mod = c("t", "tc", "tg", "tcg")) {
 
-  NTP <- lambda.to.psi(1, 1, store[[1]]$ebola$param$min.cases, 1)
+  psi <- lambda.to.psi(1, 1, store[[1]]$ebola$param$min.cases, 1)
 
   df <- mk.dwide(store, mod, 'accuracy')
 
@@ -282,7 +266,7 @@ vis.acc <- function(store, mod = c("t", "tc", "tg", "tcg")) {
     sapply(function(i) store[[i]]$ebola$param$lambda) %>%
     unique %>%
     sort %>%
-    "*"(NTP) %>%
+    "*"(psi) %>%
     round(1)
 
   x_axs <- sort(unique(sapply(1:length(store), function(i) store[[i]]$ebola$param$eps)))
@@ -313,10 +297,9 @@ vis.acc <- function(store, mod = c("t", "tc", "tg", "tcg")) {
 }
 
 ## Plot change in accuracy (absolute) between dat1 and dat2
-## Set 'scaled' to TRUE if using the .scaled dataset
 vis.rel <- function(store, dat1 = 'tc', dat2 = 'tg', var = 'accuracy') {
 
-  NTP <- lambda.to.psi(1, 1, store[[1]]$ebola$param$min.cases, 1)
+  psi <- lambda.to.psi(1, 1, store[[1]]$ebola$param$min.cases, 1)
 
   dwide <- mk.dwide(store, var = var)
   dwide$Disease <- mk.name(dwide$Disease)
@@ -355,10 +338,10 @@ vis.rel <- function(store, dat1 = 'tc', dat2 = 'tg', var = 'accuracy') {
 
 }
 
-## Plots the accuracy of transmission tree inference, with NTP as the y label
+## Plots the posterior entropy of ancestry assignments
 vis.ent <- function(store, mod = c("t", "tc", "tg", "tcg")) {
 
-  NTP <- lambda.to.psi(1, 1, store[[1]]$ebola$param$min.cases, 1)
+  psi <- lambda.to.psi(1, 1, store[[1]]$ebola$param$min.cases, 1)
 
   df <- mk.dwide(store, mod, var = 'entropy')
 
@@ -366,7 +349,7 @@ vis.ent <- function(store, mod = c("t", "tc", "tg", "tcg")) {
     sapply(function(i) store[[i]]$ebola$param$lambda) %>%
     unique %>%
     sort %>%
-    "*"(NTP) %>%
+    "*"(psi) %>%
     round(1)
 
   x_axs <- sort(unique(sapply(1:length(store), function(i) store[[i]]$ebola$param$eps)))
@@ -395,7 +378,7 @@ vis.ent <- function(store, mod = c("t", "tc", "tg", "tcg")) {
   p
 }
 
-## Plot the paramters estimates for eps and lambda
+## Plot the parameter estimates for eps and lambda
 vis.est <- function(store, dis = c("Ebola", "SARS")) {
   
   df <- NULL
@@ -625,7 +608,7 @@ psi.to.lambda <- function(eps, psi, n, I) {
   psi/((n-3 + 2*I/n)*eps)
 }
 
-## Calculates the theoretical NTP from CTD parameters
+## Calculates the theoretical psi from CTD parameters
 lambda.to.psi <- function(eps, lambda, n, I) {
   (n-3 + 2*I/n)*eps*lambda
 }
@@ -648,7 +631,7 @@ subset.outbreak <- function(outbreak, to.keep) {
 ## Make a dataframe with mean accuracy values per grid point
 mk.dwide <- function(store, mod = c("t", "tc", "tg", "tcg"), var = 'accuracy') {
 
-  NTP <- lambda.to.psi(1, 1, store[[1]]$ebola$param$min.cases, 1)
+  psi <- lambda.to.psi(1, 1, store[[1]]$ebola$param$min.cases, 1)
 
   dwide <- data.frame(matrix(nrow=length(store)*2*4,ncol=5,
                              dimnames=list(c(),c("Disease","Data","Eps","Lambda","Accuracy"))))
@@ -660,7 +643,7 @@ mk.dwide <- function(store, mod = c("t", "tc", "tg", "tcg"), var = 'accuracy') {
         dwide$Disease[counter] <- disease
         dwide$Data[counter] <- toupper(dat)
         dwide$Eps[counter] <- store[[run]][[disease]]$param$eps
-        dwide$Lambda[counter] <- store[[run]][[disease]]$param$lambda*NTP
+        dwide$Lambda[counter] <- store[[run]][[disease]]$param$lambda*psi
         dwide$Accuracy[counter] <- mean(subset(store[[run]][[disease]]$analysis,
                                                variable==var & model==dat)$value)
         counter <- counter + 1
