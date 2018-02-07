@@ -3,7 +3,7 @@ source("internals.R")
 load.libs()
 
 ##===== Use the data from the manuscript ======##
-load("../data/store.RData")
+load("../data/store.RDS")
 
 ##===== Or run the simulations yourself =====##
 ## This will take a long time on a single desktop computer;
