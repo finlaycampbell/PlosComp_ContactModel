@@ -189,7 +189,7 @@ create.store <- function(dir) {
 
   create.offsp <- function(r, disease) {
     as.vector(sapply(seq_len(r[[disease]]$param$runs),
-                     function(i) get.off~/mnsp(r[[disease]]$outbreak[[i]])))
+                     function(i) get.offsp(r[[disease]]$outbreak[[i]])))
   }
 
   add.r <- function(store,r) {
