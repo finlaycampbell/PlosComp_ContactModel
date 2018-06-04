@@ -5,8 +5,8 @@ load.libs <- function() {
 
   libs <- c('ggplot2', 'ggforce', 'dplyr', 'reshape2','RColorBrewer', 'scales',
             'gridExtra', 'grid', 'magrittr', 'outbreaker', 'outbreaker2',
-            'EpiEstim')
-  
+            'EpiEstim', 'DiagrammeR', 'xml2', 'DiagrammeRsvg', 'viridis', 'visNetwork')
+
   for(i in libs) {
     if(!require(i, character.only = TRUE)) {
       install.packages(i)
@@ -16,7 +16,7 @@ load.libs <- function() {
   if(!require('distcrete')) {
     devtools::install_github('reconhub/distcrete')
   }
-  
+
 }
 
 
@@ -36,7 +36,7 @@ analyse <- function(param, w.dens, f.dens, mu.transi, seq.length, offsp) {
   runs <- param$runs
   eps <- param$eps
   lambda <- psi.to.lambda(1, param$psi, min.cases, 1)
-  
+
   analysis <- data.frame(variable = rep(c("accuracy", "entropy"), 4*runs),
                          model = rep(c("t", "tc", "tg", "tcg"), runs, each = 2),
                          value = NA)
@@ -141,7 +141,7 @@ analyse <- function(param, w.dens, f.dens, mu.transi, seq.length, offsp) {
 run.analysis <- function(param) {
 
   ## Mutation rates are scaled by two thirds, as mu.transv is added by default
-  
+
   ebola <- analyse(param = param,
                    w.dens = discr.gamma(mean = 15.3, sd = 9.3),
                    f.dens = discr.gamma(mean = 9.1, sd = 7.3),
@@ -162,11 +162,98 @@ run.analysis <- function(param) {
 
 }
 
+## Analysis SARS dataset under different outbreaker settings
+run.sars <- function(sett, dat) {
+
+  dates <- dat$dates
+  dna <- dat$dna
+  ctd <- dat$ctd
+  ids <- dat$ids
+  w <- dat$w
+  f <- dat$f
+  
+  ## Create the initial tree using the 'star' method
+  ## Make sure the likelihood is not -Inf
+  init_alpha <- rep(which.min(dates), length(dates))
+  init_alpha[dates==min(dates)] <- NA
+  init_alpha[c(3, 4, 6)] <- 5
+  init_alpha[c(10, 8, 1)] <- 12
+  init_t_inf <- dates - which.max(f)
+
+  ## Use a beta prior on lambda
+  lambda_config <- create_config(n_iter = 1e3,
+                          prior_lambda = c(1, 10),
+                          prior_eps = c(5, 5),
+                          find_import = FALSE,
+                          init_alpha = init_alpha,
+                          init_tree = init_alpha)
+
+  ## Uniform prior over [0, 1] as used in the original paper
+  flat_prior <- function(param) {
+    if(param$mu < 0 | param$mu > 1) {
+      return(-Inf)
+    } else return(0)
+  }
+
+  priors <- custom_priors(pi = flat_prior, mu = flat_prior)
+
+  noctd_data <- outbreaker_data(dates = dates, w_dens = w, f_dens = f, dna = dna)
+  ctd_data <- outbreaker_data(dates = dates, w_dens = w, f_dens = f, dna = dna, ctd = ctd)
+
+  ## Force contacts to only be found between cases by setting lambda = 0
+  nolambda_config <- create_config(n_iter = 1e3,
+                                   prior_eps = c(5, 5),
+                                   init_lambda = 0,
+                                   move_lambda = FALSE,
+                                   find_import = FALSE,
+                                   init_alpha = init_alpha,
+                                   init_tree = init_alpha)
+
+  ## Fix lambda at a given value
+  fix_config <- create_config(n_iter = 1e3,
+                              prior_eps = c(5, 5),
+                              init_lambda = 1e-3,
+                              move_lambda = FALSE,
+                              find_import = FALSE,
+                              init_alpha = init_alpha,
+                              init_tree = init_alpha)
+
+  
+  ## Run without contact data
+  if(sett == 'noctd') {
+    res <- outbreaker(data = noctd_data, config = lambda_config, priors = priors)
+  }
+
+  if(sett == 'nolambda') {
+    res <- outbreaker(data = ctd_data, config = nolambda_config, priors = priors)
+  }
+
+  if(sett == 'fix_4') {
+    fix_config$init_lambda <- 1e-4
+    res <- outbreaker(data = ctd_data, config = fix_config, priors = priors)
+  }
+
+  if(sett == 'fix_5') {
+    fix_config$init_lambda <- 1e-5
+    res <- outbreaker(data = ctd_data, config = fix_config, priors = priors)
+  }
+  
+  if(sett == 'lambda_10') {
+    lambda_config$prior_lambda <- c(1, 10)
+    res <- outbreaker(data = ctd_data, config = lambda_config, priors = priors)
+  }
+
+  res$sett <- sett
+
+  return(res)
+  
+}
+
 ## Extract summary results from raw results
 create.store <- function(dir) {
-  
+
   store = list()
-  
+
   create.est <- function(disease,temp.runs) {
 
     calc.est <- function(model, var){
@@ -196,7 +283,7 @@ create.store <- function(dir) {
 
     ## Adding Ebola
     temp.runs <- r$ebola$param$runs
-    
+
     if(is.null(store[[run]]$ebola$param)) {
       store[[run]]$ebola$param  <- r$ebola$param
     } else {
@@ -216,13 +303,13 @@ create.store <- function(dir) {
 
     ## Adding SARS
     temp.runs <- r$sars$param$runs
-    
+
     if(is.null(store[[run]]$sars$param)) {
       store[[run]]$sars$param  <- r$sars$param
     } else {
       store[[run]]$sars$param$runs  <- store[[run]]$sars$param$runs + temp.runs
     }
-    
+
     store[[run]]$sars$analysis <- rbind(store[[run]]$sars$analysis,
                                         r$sars$analysis)
 
@@ -234,7 +321,7 @@ create.store <- function(dir) {
     store[[run]]$sars$offsp <- c(store[[run]]$sars$offsp, create.offsp(r, 'sars'))
 
     return(store)
-    
+
   }
 
   ## Load previously downloaded results into store
@@ -380,7 +467,7 @@ vis.ent <- function(store, mod = c("t", "tc", "tg", "tcg")) {
 
 ## Plot the parameter estimates for eps and lambda
 vis.est <- function(store, dis = c("Ebola", "SARS")) {
-  
+
   df <- NULL
 
   for(i in seq_along(store)) {
@@ -460,6 +547,244 @@ vis.est <- function(store, dis = c("Ebola", "SARS")) {
   return(p)
 }
 
+## Plot a sample network showing tTree, ctd, tg and tcg
+vis.net <- function(eg_store) {
+
+  sim <- eg_store$outbreak[[1]]
+  tcg_res <- eg_store$tcg.result[[1]]
+  tg_res <- eg_store$tg.result[[1]]
+  ctd <- eg_store$CTD[[1]]
+  ances <- sim$ances[!is.na(sim$ances)]
+  tTree <- data.frame(from = sim$ances, to = sim$id)
+
+  n <- sim$n
+  i <- 1:n
+  lab <- as.character(i)
+  lab[nchar(lab) < 2] %<>% paste0(" ", ., " ")
+
+  n.cols <- viridis::viridis(diff(range(sim$onset)) + 1)
+  e.cols <- c('red', 'green')
+  width <- 3
+
+  sim.n <- data.frame(id = sim$id[i],
+                      color = n.cols[sim$onset - min(sim$onset) + 1],
+                      label = lab,
+                      value = 2)
+
+  sim.e <- data.frame(from = sim$ances, to = sim$id) %>% na.omit
+
+  tcg.e <- summary(tcg_res)$tree %>% select(1, 2) %>% na.omit
+  tcg.e$color <- e.cols[1]
+  tcg.e$color[tcg.e$from == ances] <- e.cols[2]
+
+  tg.e <- summary(tg_res)$tree %>% slice(i) %>% select(1, 2) %>% na.omit
+  tg.e$color <- e.cols[1]
+  tg.e$color[tg.e$from == ances] <- e.cols[2]
+
+  ctd.e <- data.frame(from = ctd$V1, to = ctd$V2)
+  ctd.e$color <- e.cols[1]
+  ctd.e$color[apply(ctd, 1, is.correct, tTree)] <- e.cols[2]
+  ctd.e$dashes <- FALSE
+
+  ## Find transmission pairs that aren't reported
+  df <- tTree[!apply(tTree, 1, is.correct, ctd),] %>% na.omit
+  df$color <- e.cols[2]
+  df$dashes <- TRUE
+  ctd.e <- rbind(ctd.e, df)
+  
+  ## Plot the legend
+  p <- ggplot(data.frame(x = seq_along(n.cols)), aes(x, x, colour = x)) +
+    geom_point() +
+    theme(legend.direction = 'horizontal',
+          legend.position = 'bottom') +
+    scale_color_viridis(name = 'Day of sampling',
+                        guide = guide_colorbar(title.position = 'top'))
+  ##ggsave(p, filename = here("figs/legend.png"),
+  ##       width = 20, height = 20, dpi = 300)
+  
+  ## Extract x and y coordinates for a visNetwork object - use the ctd edges,
+  ## because this will be the most convoluted
+  xy <- get.xy(sim.n, sim.e)
+
+  ## Small manual adjustments
+  xy[14, 2:3] %<>% as.numeric %>% add(c(0, -30)) %>% as.character
+  xy[11, 2:3] %<>% as.numeric %>% add(c(30, 10)) %>% as.character
+  xy[8, 2:3] %<>% as.numeric %>% add(c(25, -10)) %>% as.character
+  
+  sim.n <- cbind(sim.n, xy[,c(2, 3)])
+  
+  sim.v <- visNetwork(sim.n, sim.e, width = 2000, height = 2000) %>%
+    visNodes(fixed = TRUE, shape = 'circle', font = list(size = 20, color = 'white')) %>%
+    visEdges(arrows = 'to', color = e.cols[2], width = width)
+
+  ctd.v <- visNetwork(sim.n, ctd.e, width = 2000, height = 2000) %>%
+    visNodes(fixed = TRUE, shape = 'circle', font = list(size = 20, color = 'white')) %>%
+    visEdges(width = width)
+
+  tcg.v <- visNetwork(sim.n, tcg.e, width = 2000, height = 2000) %>%
+    visNodes(fixed = TRUE, shape = 'circle', font = list(size = 20, color = 'white')) %>%
+    visEdges(arrows = 'to', width = width)
+
+  tg.v <- visNetwork(sim.n, tg.e, width = 2000, height = 2000) %>%
+    visNodes(fixed = TRUE, shape = 'circle', font = list(size = 20, color = 'white')) %>%
+    visEdges(arrows = 'to', width = width)
+
+  return(list(sim.v = sim.v, ctd.v = ctd.v, tg.v = tg.v, tcg.v = tcg.v))
+
+}
+
+## Plot the sars network
+vis.sars <- function(noctd_res, ctd_res, nolambda_res, dates, ids,
+                     burnin = 1000, xy_res = NULL, ctd) {
+
+  get.node.lab <- function(labels = NULL) {
+    if(is.null(labels)) labels <- 1:N
+    return(labels)
+  }
+
+  get.n.e <- function(res, dates, min.date, min_support) {
+    
+    res %<>% filter(step > burnin)
+    alpha <- res[grep("alpha", names(res))]
+    from <- unlist(alpha)
+    to <- as.vector(col(alpha))
+    N <- ncol(alpha)
+    
+    nodes <- data.frame(id = seq_len(ncol(alpha)),
+                        label = seq_len(ncol(alpha)))
+    nodes$color <- node.col[dates - min.date + 1]
+    nodes$label <- get.node.lab(ids)
+    nodes$label[nchar(nodes$label) < 7] %<>% paste0(" ", ., " ")
+    
+    edges <- stats::na.omit(data.frame(xyTable(from, to)))
+    edges[3] %<>% divide_by(nrow(alpha))
+    names(edges) <- c("from", "to", "value")
+    edges <- edges[edges$value > min_support,,drop = FALSE]
+
+    return(list(nodes = nodes, edges = edges))
+    
+  }
+  
+  get.visn <- function(nodes, edges, min = 1, to = TRUE) {
+    
+    visNetwork(nodes = nodes, edges = edges, width = 2000, height = 2000) %>%
+      visNodes(fixed = TRUE, shape = 'circle', font = list(size = 10, color = 'white')) %>%
+      visEdges(arrows = list(to = to, scaleFactor = 1),
+               scaling = list(min = min, max = 5))
+
+  }
+  
+  ctd.dates <- summary(ctd_res)$tree$time
+  noctd.dates <- summary(noctd_res)$tree$time
+  nolambda.dates <- summary(nolambda_res)$tree$time
+  
+  ctd.ddates <- as.Date(ctd.dates, origin = "2003-02-24")
+  noctd.ddates <- as.Date(noctd.dates, origin = "2003-02-24")
+  nolambda.ddates <- as.Date(nolambda.dates, origin = "2003-02-24")
+  
+  ddates <- as.Date(dates, origin = "2003-02-24")
+  node.col <- viridis::viridis(diff(range(as.numeric(c(ctd.dates,
+                                                       noctd.dates,
+                                                       nolambda.dates)))) + 1)
+  width <- 3
+  min_support <- 0.01
+
+  min.date <- min(c(ctd.dates, noctd.dates, nolambda.dates))
+  ctd.n.e <- get.n.e(ctd_res, ctd.dates, min.date, min_support)
+  noctd.n.e <- get.n.e(noctd_res, noctd.dates, min.date, min_support)
+  nolambda.n.e <- get.n.e(nolambda_res, nolambda.dates, min.date, min_support)
+
+  contact.n.e <- ctd.n.e
+  contact.n.e$edges <- mutate(ctd, value = 1)
+  contact.n.e$nodes$color <- gray.colors(100)[10]
+  
+  if(is.null(xy_res)) {
+    xy.nodes <- ctd.n.e$nodes
+    xy.edges <- ctd.n.e$edges
+  } else {
+    xy.n.e <- get.n.e(xy_res, ctd.dates, min.date, 0.005)
+    xy.nodes <- xy.n.e$nodes
+    xy.edges <- xy.n.e$edges
+  }
+
+  xy <- get.xy(xy.nodes, xy.edges[,c(1, 2)])
+
+  ## Small manual adjustments
+  xy[match('sin848', ids), 2:3] %<>% as.numeric %>% add(c(-65, -45)) %>% as.character
+  xy[match('sin852', ids), 2:3] %<>% as.numeric %>% add(c(-35, -30)) %>% as.character
+  xy[match('sin842', ids), 2:3] %<>% as.numeric %>% add(c(-15, 0)) %>% as.character
+  xy[match('sin850', ids), 2:3] %<>% as.numeric %>% add(c(-15, 0)) %>% as.character
+  xy[match('sin846', ids), 2:3] %<>% as.numeric %>% add(c(-15, 0)) %>% as.character
+
+  ctd.n.e$nodes %<>% cbind(xy[,c(2, 3)])
+  noctd.n.e$nodes %<>% cbind(xy[,c(2, 3)])
+  nolambda.n.e$nodes %<>% cbind(xy[,c(2, 3)])
+  contact.n.e$nodes %<>% cbind(xy[,c(2, 3)])
+
+  ## Plot the legend
+  date.vec <- c(ctd.ddates, noctd.ddates, nolambda.ddates)
+  p <- ggplot(data.frame(x = seq_along(date.vec), y = date.vec), aes(x, x, colour = y)) +
+    geom_point() +
+    scale_color_viridis(name = 'Median posterior\ninfection date',
+                        guide = guide_colorbar(title.position = 'top', reverse = T),
+                        labels = function(i) format(as.Date(i, origin = "1970-01-01"), format = "%Y-%m-%d"))
+  
+  ##ggsave(p, filename = here("figs/sars_legend.png",
+  ##       width = 20, height = 20, dpi = 300)
+  
+  out <- list(ctd.v = get.visn(ctd.n.e$nodes, ctd.n.e$edges),
+              noctd.v = get.visn(noctd.n.e$nodes, noctd.n.e$edges),
+              nolambda.v = get.visn(nolambda.n.e$nodes, nolambda.n.e$edges, 5),
+              contact.v = get.visn(contact.n.e$nodes, contact.n.e$edges, to = FALSE))
+  
+  return(out)
+  
+}
+
+## Plot the inferred infection times
+vis.tinf <- function(noctd_res, ctd_res, nolambda_res, dates, ids, burnin = 1000) {
+
+  get_t_inf_lab <- function(labels = NULL) {
+    if(is.null(labels)) labels <- 1:N
+    return(labels)
+  }
+  
+  get.df <- function(res, mod) {
+    t_inf <- as.matrix(res[,grep("t_inf", names(res))])
+    dates <- as.vector(t_inf)
+    cases <- as.vector(col(t_inf))
+    out_dat <- data.frame(cases = factor(cases), dates = dates, mod = mod)
+  }
+
+  ddates <- as.Date(dates, origin = "2003-02-24")
+  
+  df <- rbind(get.df(noctd_res, 'tg'), get.df(ctd_res, 'tcg'), get.df(nolambda_res, 'tc')) %>%
+    mutate(dates = as.Date(dates - 1, origin = min(ddates)))
+  df$cases <- factor(ids[df$cases], levels = ids[order(dates, decreasing = TRUE)])
+  df$mod %<>% factor(levels = c("tc", "tcg", "tg"))
+
+  labs <- c(expression(paste("TCG (", lambda, " = 0)")),
+            expression(paste("TCG (", lambda, " = 1e-4)")),
+            expression(paste("TG")))
+
+  df2 <- data.frame(dates = ddates, cases = ids)
+  
+  ggplot(df) +
+    geom_violin(aes(cases, dates, fill = mod), bw = 0.7, width = 0.7) +
+    geom_point(data = df2, aes(cases, dates)) +
+    coord_flip() + 
+    labs(y = 'Inferred date of infection', x = NULL) +
+    scale_fill_manual(values = match.col('data'), name = "Settings", labels = labs,
+                      guide = guide_legend(reverse = T)) +
+    theme_minimal(base_size = 10) +
+    theme(legend.text.align = 0,
+          legend.position = 'bottom',
+          legend.direction = 'horizontal',
+          legend.background = element_blank(),
+          legend.box.background = element_rect(colour = "black"))
+
+}
+
 
 ##===== Plot saving functions =====##
 
@@ -468,27 +793,40 @@ fig.save <- function(p, dir, name, ext = 'svg', ...) {
 
   ggsave(p, file=paste0(dir, name, ".", ext), ...)
   return(NULL)
-  
+
 }
 
 ## Create the manuscript figures
-create.figs <- function(store, dir) {
+create.figs <- function(sim_store, sars_store, eg_store, dat, dir) {
 
-  p <- vis.acc(store, mod = c("t", "tc", "tg", "tcg"))
-  fig.save(p, dir, "Fig1", width = 7.5, height = 3.9, dpi = 600, ext = 'tiff')
+  p <- vis.acc(sim_store, mod = c("t", "tc", "tg", "tcg"))
+  fig.save(p, dir, "Fig1", width = 7.5, height = 3.9, dpi = 300, ext = 'tiff')
 
-  p <- vis.rel(store)
-  fig.save(p, dir, "Fig2", width = 3.9, height = 3.9, dpi = 600, ext = 'tiff')
+  p <- vis.rel(sim_store)
+  fig.save(p, dir, "Fig2", width = 3.9, height = 3.9, dpi = 300, ext = 'tiff')
 
-  p <- vis.ent(store, mod = c("t", "tc", "tg", "tcg"))
-  fig.save(p, dir, "S1Fig", width = 7.5, height = 3.9, dpi = 600, ext = 'tiff')
+  ## Figure 3 - will open in browser
+  sars.p <- vis.sars(sars_store$noctd, sars_store$fix_4, sars_store$nolambda, dat$dates,
+                dat$ids, xy_res = sars_store$fix_5, ctd = dat$ctd)
+  
+  ## Figure S1 - will open in browser
+  net.p <- vis.net(eg_store)
+  
+  p <- vis.ent(sim_store, mod = c("t", "tc", "tg", "tcg"))
+  fig.save(p, dir, "S2Fig", width = 7.5, height = 3.9, dpi = 300, ext = 'tiff')
 
-  p <- vis.est(store, 'EBOV')
-  fig.save(p, dir, "S2Fig", width = 7.5, height = 3.9, dpi = 600, ext = 'tiff')
+  p <- vis.est(sim_store, 'EBOV')
+  fig.save(p, dir, "S3Fig", width = 7.5, height = 3.9, dpi = 300, ext = 'tiff')
 
-  p <- vis.est(store, 'SARS')
-  fig.save(p, dir, "S3Fig", width = 7.5, height = 3.9, dpi = 600, ext = 'tiff')
-
+  p <- vis.est(sim_store, 'SARS')
+  fig.save(p, dir, "S4Fig", width = 7.5, height = 3.9, dpi = 300, ext = 'tiff')
+  
+  p <- vis.tinf(sars_store$noctd, sars_store$fix_4, sars_store$nolambda, dat$dates,
+                dat$ids)
+  fig.save(p, dir, "S5Fig", width = 7.5, height = 7.5, dpi = 300, ext = 'tiff')
+  
+  return(list(sars = sars.p, net = net.p))
+  
 }
 
 
@@ -555,7 +893,7 @@ create.offsp <- function(R0, k) {
 
   ## v is the distribution of individual reproduction numbers
   v <- distcrete::distcrete('gamma', 1, shape = k, rate = k/R0)
-  v$d(x = seq(0, 10, 1))
+  v$d(x = seq(0, 20, 0.1))
 
 }
 
@@ -716,5 +1054,82 @@ mk.name <- function(x) {
   x[x == 'sars'] <- 'SARS-CoV'
 
   x
+
+}
+
+## Is a given pair of cases a transmission pair or not
+is.correct <- function(x, network) {
+  apply(network, 2, function(i) i %in% x) %>% apply(1, all) %>% any
+}
+
+## Get the x and y coordinates from a given node and edge object
+get.xy <- function(nodes, edges) {
+
+  ## Create a graph object
+  graph <- DiagrammeR::create_graph(nodes_df = nodes,
+                                    edges_df = edges)
+  ## change layout here
+                                        #graph_attrs = "layout = twopi")
+
+  ## Render the graph using Graphviz
+  svg <- DiagrammeRsvg::export_svg(DiagrammeR::render_graph(graph))
+  
+  ## look at it to give us a visual check
+                                        #htmltools::browsable(htmltools::HTML(svg))
+  
+  ## use html to bypass namespace problems
+  svgh <- xml2::read_html(paste0(strsplit(svg,"\\n")[[1]][-(1:6)],collapse="\\n"))
+
+  ## Get positions
+  node_xy <- xml2::xml_find_all(svgh,"//g[contains(@class,'node')]") %>%
+    {
+      data.frame(
+        id = xml2::xml_text(xml2::xml_find_all(.,".//title")),
+        x = xml2::xml_attr(xml2::xml_find_all(.,".//*[2]"), "cx"),
+        y = xml2::xml_attr(xml2::xml_find_all(.,".//*[2]"), "cy"),
+        stringsAsFactors = FALSE
+      )
+    }
+
+  ##  assuming same order
+  ##   easy enough to do join with dplyr, etc.
+  ##graph$nodes_df$x <- as.numeric(node_xy$x)[order(node_xy$id)][1:15]
+  ##graph$nodes_df$y <- -as.numeric(node_xy$y)[order(node_xy$id)][1:15]
+
+  return(node_xy)
+  
+}
+
+## Load sars data and prepare for analysis
+get.sars.dat <- function() {
+
+  ## Extract dates and ids
+  dat <- read.csv(here("data/sars2003.csv"))
+
+  ids <- dat %>% pull(ID) %>% tolower
+
+  dates <- dat %>% pull(Date) %>%
+    as.Date(format = '%d/%m/%Y') %>%
+    subtract(., min(.) - 1) %>% 
+    as.numeric()
+
+  ## Load FASTA files
+  dna <- ape::read.FASTA(here("data/sars2003.fasta"))
+  names(dna) <- NULL
+
+  ## Generate contact matrix from here("dat/vega2004_fig4.jpg")
+  ctd <- data.frame(from = c('sin2500', 'sin2500', 'sin2500', 'sin848', 'sin848', 'sin848'),
+                    to = c('sin2677', 'sin2748', 'sin2774', 'sin849', 'sin850', 'sin852'))
+
+  ## Replace labels with indices
+  ctd[] <- lapply(ctd, match, ids)
+
+  ## Create generation time distribution
+  w <- sapply(1:30, EpiEstim::DiscrSI, 8.7, 3.6)
+
+  ## Assume incubation period is the same generation time distriubution
+  f <- sapply(1:30, EpiEstim::DiscrSI, 6.4, 4.1)
+
+  return(list(dates = dates, dna = dna, ctd = ctd, ids = ids, w = w, f = f))
 
 }
